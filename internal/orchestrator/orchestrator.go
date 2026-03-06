@@ -686,7 +686,22 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, result workerResult
 	o.state.Unlock()
 
 	if result.err == nil {
-		// Normal completion: schedule a continuation retry with short delay.
+		// Normal completion: check if reconciliation already marked this issue
+		// as terminal (e.g., Codex moved the issue to Done via linear_graphql).
+		// If so, skip the continuation retry entirely.
+		o.state.Lock()
+		alreadyCompleted := o.state.Completed[result.issueID]
+		o.state.Unlock()
+
+		if alreadyCompleted {
+			o.logger.Info("worker completed normally and issue already terminal, no continuation needed",
+				"issue_id", result.issueID,
+				"identifier", result.identifier,
+			)
+			return
+		}
+
+		// Schedule a continuation retry with short delay.
 		// The retry handler will re-check if the issue is still in an active state
 		// before dispatching again (matching the Elixir reference implementation).
 		o.logger.Info("worker completed normally, scheduling continuation check",
@@ -762,6 +777,15 @@ func (o *Orchestrator) waitForRetry(issueID string, timer *time.Timer) {
 	o.state.Unlock()
 
 	o.logger.Info("retry timer fired", "issue_id", issueID, "identifier", identifier, "attempt", attempt)
+
+	// Check if already completed (e.g., by reconciliation detecting terminal state).
+	o.state.Lock()
+	alreadyCompleted := o.state.Completed[issueID]
+	o.state.Unlock()
+	if alreadyCompleted {
+		o.logger.Info("retry: issue already completed, skipping", "issue_id", issueID)
+		return
+	}
 
 	// Re-fetch the issue from the tracker to get its current state.
 	issues, err := o.tracker.FetchIssueStatesByIDs([]string{issueID})
@@ -873,13 +897,14 @@ func (o *Orchestrator) reconcile(ctx context.Context) {
 			continue
 		}
 
-		// Terminal -> cancel the worker and clean up.
+		// Terminal -> mark completed and cancel the worker.
 		if o.isTerminalStateLocked(currentState) {
 			o.logger.Info("reconciliation: issue moved to terminal state, stopping worker",
 				"issue_id", id,
 				"identifier", entry.Identifier,
 				"state", currentState,
 			)
+			o.state.Completed[id] = true
 			if entry.Cancel != nil {
 				entry.Cancel()
 			}
