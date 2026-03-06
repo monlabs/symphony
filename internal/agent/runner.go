@@ -145,7 +145,9 @@ func (r *DefaultRunner) RunAttempt(ctx context.Context, issue *domain.Issue, att
 	// 1. Send initialize request.
 	initResult, err := sess.sendRequest(ctx, "initialize", map[string]interface{}{
 		"protocolVersion": "2025-01-01",
-		"capabilities":    map[string]interface{}{},
+		"capabilities":    map[string]interface{}{
+			"experimentalApi": true,
+		},
 		"clientInfo": map[string]interface{}{
 			"name":    "symphony",
 			"version": "0.1.0",
