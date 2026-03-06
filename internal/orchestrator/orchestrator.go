@@ -682,7 +682,10 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, result workerResult
 	}
 
 	delete(o.state.Running, result.issueID)
-	delete(o.state.Claimed, result.issueID)
+	// Do NOT release claimed here. The claim prevents re-dispatch during
+	// the continuation retry window. It is released by the retry handler
+	// after confirming the issue's terminal/inactive state.
+	// (Matches Elixir reference: pop_running_entry does not delete claimed.)
 	o.state.Unlock()
 
 	if result.err == nil {
@@ -715,6 +718,14 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, result workerResult
 		delay := o.backoffDelay(nextAttempt)
 		o.scheduleRetry(result.issueID, result.identifier, nextAttempt, delay, result.err.Error())
 	}
+}
+
+// releaseClaim removes an issue from both the Claimed and Completed sets.
+func (o *Orchestrator) releaseClaim(issueID string) {
+	o.state.Lock()
+	delete(o.state.Claimed, issueID)
+	o.state.Completed[issueID] = true
+	o.state.Unlock()
 }
 
 // backoffDelay computes min(10000 * 2^(attempt-1), max_retry_backoff_ms).
@@ -798,10 +809,8 @@ func (o *Orchestrator) waitForRetry(issueID string, timer *time.Timer) {
 	}
 
 	if len(issues) == 0 {
-		o.logger.Warn("retry: issue not found, marking completed", "issue_id", issueID)
-		o.state.Lock()
-		o.state.Completed[issueID] = true
-		o.state.Unlock()
+		o.logger.Warn("retry: issue not found, releasing claim", "issue_id", issueID)
+		o.releaseClaim(issueID)
 		return
 	}
 
@@ -810,19 +819,15 @@ func (o *Orchestrator) waitForRetry(issueID string, timer *time.Timer) {
 	// Check if the issue is now in a terminal state.
 	if o.isTerminalState(issue.State) {
 		o.logger.Info("retry: issue is now terminal, cleaning up", "issue_id", issueID, "state", issue.State)
-		o.state.Lock()
-		o.state.Completed[issueID] = true
-		o.state.Unlock()
+		o.releaseClaim(issueID)
 		o.workspaceMgr.CleanWorkspace(context.Background(), identifier)
 		return
 	}
 
 	// Check if the issue is still in an active state and can be dispatched.
 	if !o.isActiveState(issue.State) {
-		o.logger.Info("retry: issue no longer in active state, marking completed", "issue_id", issueID, "state", issue.State)
-		o.state.Lock()
-		o.state.Completed[issueID] = true
-		o.state.Unlock()
+		o.logger.Info("retry: issue no longer in active state, releasing claim", "issue_id", issueID, "state", issue.State)
+		o.releaseClaim(issueID)
 		return
 	}
 
