@@ -186,6 +186,9 @@ func ParseServiceConfig(raw map[string]interface{}) *ServiceConfig {
 	}
 	cfg.Codex.ThreadSandbox = getString(codex, "thread_sandbox")
 	if cfg.Codex.ThreadSandbox == "" {
+		cfg.Codex.ThreadSandbox = getString(codex, "sandbox")
+	}
+	if cfg.Codex.ThreadSandbox == "" {
 		cfg.Codex.ThreadSandbox = DefaultThreadSandbox
 	}
 	cfg.Codex.TurnSandboxPolicy = getString(codex, "turn_sandbox_policy")
