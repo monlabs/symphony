@@ -610,8 +610,12 @@ func (o *Orchestrator) runWorker(ctx context.Context, issue *domain.Issue, attem
 		logger.Info("agent session completed normally")
 	}
 
-	// 6. Run after_run hook (best-effort).
-	o.workspaceMgr.RunAfterRun(ctx, ws.Path)
+	// 6. Run after_run hook (best-effort, uses independent context).
+	// The worker context may be cancelled by reconciliation, but the after_run
+	// hook (commit, push, PR, merge) must still complete.
+	hookCtx, hookCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer hookCancel()
+	o.workspaceMgr.RunAfterRun(hookCtx, ws.Path)
 }
 
 // ---------------------------------------------------------------------------
