@@ -23,7 +23,7 @@ const (
 // RunnerConfig holds configuration for the agent runner subprocess.
 type RunnerConfig struct {
 	CodexCommand      string
-	ApprovalPolicy    string
+	ApprovalPolicy    interface{} // string or map[string]interface{}
 	ThreadSandbox     string
 	TurnSandboxPolicy string
 	TurnTimeoutMs     int
@@ -166,7 +166,7 @@ func (r *DefaultRunner) RunAttempt(ctx context.Context, issue *domain.Issue, att
 	threadStartParams := map[string]interface{}{
 		"sandbox": r.config.ThreadSandbox,
 	}
-	if r.config.ApprovalPolicy != "" {
+	if r.config.ApprovalPolicy != nil && r.config.ApprovalPolicy != "" {
 		threadStartParams["approvalPolicy"] = r.config.ApprovalPolicy
 	}
 	threadResult, err := sess.sendRequest(ctx, "thread/start", threadStartParams)
@@ -220,7 +220,7 @@ func (r *DefaultRunner) RunAttempt(ctx context.Context, issue *domain.Issue, att
 				},
 			},
 		}
-		if r.config.ApprovalPolicy != "" {
+		if r.config.ApprovalPolicy != nil && r.config.ApprovalPolicy != "" {
 			turnParams["approvalPolicy"] = r.config.ApprovalPolicy
 		}
 		if r.config.TurnSandboxPolicy != "" {
@@ -246,9 +246,9 @@ func (r *DefaultRunner) RunAttempt(ctx context.Context, issue *domain.Issue, att
 		case turnOutcomeCompleted:
 			r.logger.Info("turn completed successfully", "turn", turn, "issue_id", issue.ID)
 			r.emitUpdate(onUpdate, issue.ID, domain.EventTurnCompleted, fmt.Sprintf("turn %d completed", turn), nil)
-			// Codex does all work within a single turn. A completed turn means the agent
-			// finished its work. No need to send continuation turns.
-			return nil
+			// Continue to next turn if we haven't hit max — the orchestrator will
+			// check if the issue is still active before dispatching again.
+			continue
 
 		case turnOutcomeFailed:
 			r.logger.Warn("turn failed", "turn", turn, "issue_id", issue.ID)
@@ -326,16 +326,19 @@ func (r *DefaultRunner) processTurnEvents(ctx context.Context, sess *session, is
 			r.emitUpdate(onUpdate, issueID, domain.EventTurnCancelled, "turn cancelled by server", nil)
 			return turnOutcomeCancelled, nil
 
-		case "approval/required":
-			// Auto-approve command and file change approvals.
+		case "item/commandExecution/requestApproval",
+			"execCommandApproval",
+			"applyPatchApproval",
+			"item/fileChange/requestApproval":
+			// Auto-approve command execution and file change approvals.
 			r.handleApproval(ctx, sess, msg, issueID, onUpdate)
 
-		case "input/required":
-			// User input requests: fail immediately since we're non-interactive.
-			r.handleInputRequired(ctx, sess, msg, issueID, onUpdate)
+		case "item/tool/requestUserInput":
+			// User input requests: reply with non-interactive answer.
+			r.handleToolRequestUserInput(ctx, sess, msg, issueID, onUpdate)
 
-		case "tool/call":
-			// Unsupported tool call: return error result.
+		case "item/tool/call":
+			// Dynamic tool call: return unsupported error.
 			r.handleUnsupportedToolCall(ctx, sess, msg, issueID, onUpdate)
 
 		case "notification":
@@ -374,19 +377,15 @@ func (r *DefaultRunner) processTurnEvents(ctx context.Context, sess *session, is
 }
 
 // handleApproval auto-approves approval requests from the app-server.
+// Uses "acceptForSession" decision to match Codex app-server protocol.
 func (r *DefaultRunner) handleApproval(ctx context.Context, sess *session, msg *ProtocolMessage, issueID string, onUpdate UpdateCallback) {
-	approvalType := ""
-	if msg.Params != nil {
-		approvalType, _ = msg.Params["type"].(string)
-	}
-
-	r.logger.Info("auto-approving request", "type", approvalType, "issue_id", issueID)
-	r.emitUpdate(onUpdate, issueID, domain.EventApprovalAutoApproved, fmt.Sprintf("auto-approved: %s", approvalType), nil)
+	r.logger.Info("auto-approving request", "method", msg.Method, "issue_id", issueID)
+	r.emitUpdate(onUpdate, issueID, domain.EventApprovalAutoApproved, fmt.Sprintf("auto-approved: %s", msg.Method), nil)
 
 	if msg.ID != nil {
 		resp := &ProtocolMessage{
 			ID:     msg.ID,
-			Result: map[string]interface{}{"approved": true},
+			Result: map[string]interface{}{"decision": "acceptForSession"},
 		}
 		if err := sess.writeMessage(resp); err != nil {
 			r.logger.Error("failed to send approval response", "error", err, "issue_id", issueID)
@@ -394,21 +393,34 @@ func (r *DefaultRunner) handleApproval(ctx context.Context, sess *session, msg *
 	}
 }
 
-// handleInputRequired fails immediately since we are non-interactive.
-func (r *DefaultRunner) handleInputRequired(ctx context.Context, sess *session, msg *ProtocolMessage, issueID string, onUpdate UpdateCallback) {
-	r.logger.Warn("input required but running non-interactively, failing", "issue_id", issueID)
-	r.emitUpdate(onUpdate, issueID, domain.EventTurnInputRequired, "user input required but agent is non-interactive", nil)
+// handleToolRequestUserInput replies with a non-interactive answer.
+func (r *DefaultRunner) handleToolRequestUserInput(ctx context.Context, sess *session, msg *ProtocolMessage, issueID string, onUpdate UpdateCallback) {
+	r.logger.Info("tool user input requested, sending non-interactive answer", "issue_id", issueID)
+	r.emitUpdate(onUpdate, issueID, domain.EventTurnInputRequired, "user input required, sending non-interactive answer", nil)
 
 	if msg.ID != nil {
+		// Build answers map from questions if present.
+		answers := map[string]interface{}{}
+		if msg.Params != nil {
+			if questions, ok := msg.Params["questions"].([]interface{}); ok {
+				for _, q := range questions {
+					if qMap, ok := q.(map[string]interface{}); ok {
+						if qID, ok := qMap["id"].(string); ok {
+							answers[qID] = map[string]interface{}{
+								"answers": []string{"This is a non-interactive session. Operator input is unavailable."},
+							}
+						}
+					}
+				}
+			}
+		}
+
 		resp := &ProtocolMessage{
-			ID: msg.ID,
-			Error: &ProtocolError{
-				Code:    -1,
-				Message: "non-interactive agent cannot provide user input",
-			},
+			ID:     msg.ID,
+			Result: map[string]interface{}{"answers": answers},
 		}
 		if err := sess.writeMessage(resp); err != nil {
-			r.logger.Error("failed to send input required error response", "error", err, "issue_id", issueID)
+			r.logger.Error("failed to send input answer response", "error", err, "issue_id", issueID)
 		}
 	}
 }

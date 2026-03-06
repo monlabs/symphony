@@ -671,17 +671,14 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, result workerResult
 	o.state.Unlock()
 
 	if result.err == nil {
-		// Normal completion: mark as completed. The next poll cycle will pick up
-		// the issue again only if it's still in an active state (i.e., not moved
-		// to Done/Closed by the user).
-		o.logger.Info("worker completed successfully, marking done",
+		// Normal completion: schedule a continuation retry with short delay.
+		// The retry handler will re-check if the issue is still in an active state
+		// before dispatching again (matching the Elixir reference implementation).
+		o.logger.Info("worker completed normally, scheduling continuation check",
 			"issue_id", result.issueID,
 			"identifier", result.identifier,
 		)
-		o.state.Lock()
-		o.state.Completed[result.issueID] = true
-		o.state.Unlock()
-		return
+		o.scheduleRetry(result.issueID, result.identifier, 1, 1000, "")
 	} else {
 		// Abnormal exit: exponential backoff.
 		nextAttempt := result.attempt + 1

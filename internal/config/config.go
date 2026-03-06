@@ -67,7 +67,7 @@ type AgentConfig struct {
 // CodexConfig configures the coding-agent subprocess.
 type CodexConfig struct {
 	Command           string
-	ApprovalPolicy    string
+	ApprovalPolicy    interface{} // string ("never", "on-failure", etc.) or map
 	ThreadSandbox     string
 	TurnSandboxPolicy string
 	TurnTimeoutMs     int
@@ -92,7 +92,11 @@ const (
 	DefaultMaxTurns          = 20
 	DefaultMaxRetryBackoffMs = 300000
 	DefaultCodexCommand        = "codex app-server"
-	DefaultApprovalPolicy      = "never"
+	// DefaultApprovalPolicy uses the reject-object form which auto-rejects
+	// sandbox approvals, rules, and MCP elicitations (matching the Elixir reference).
+	// The runner code handles the string form; this constant is only used when
+	// WORKFLOW.md omits codex.approval_policy entirely.
+	DefaultApprovalPolicy      = ""
 	DefaultThreadSandbox       = "workspace-write"
 	DefaultTurnSandboxPolicy   = "workspace-write"
 	DefaultTurnTimeoutMs       = 3600000
@@ -167,9 +171,18 @@ func ParseServiceConfig(raw map[string]interface{}) *ServiceConfig {
 	if cfg.Codex.Command == "" {
 		cfg.Codex.Command = DefaultCodexCommand
 	}
-	cfg.Codex.ApprovalPolicy = getString(codex, "approval_policy")
-	if cfg.Codex.ApprovalPolicy == "" {
-		cfg.Codex.ApprovalPolicy = DefaultApprovalPolicy
+	// approval_policy can be a string ("never", "on-failure") or a map (reject object).
+	if ap, ok := codex["approval_policy"]; ok {
+		switch v := ap.(type) {
+		case string:
+			cfg.Codex.ApprovalPolicy = resolveEnvVar(v)
+		case map[string]interface{}, map[interface{}]interface{}:
+			cfg.Codex.ApprovalPolicy = v
+		default:
+			cfg.Codex.ApprovalPolicy = defaultApprovalPolicyMap()
+		}
+	} else {
+		cfg.Codex.ApprovalPolicy = defaultApprovalPolicyMap()
 	}
 	cfg.Codex.ThreadSandbox = getString(codex, "thread_sandbox")
 	if cfg.Codex.ThreadSandbox == "" {
@@ -243,6 +256,26 @@ func subMap(m map[string]interface{}, key string) map[string]interface{} {
 	default:
 		return map[string]interface{}{}
 	}
+}
+
+// defaultApprovalPolicyMap returns the default approval policy as a reject-object
+// matching the Elixir reference implementation.
+func defaultApprovalPolicyMap() map[string]interface{} {
+	return map[string]interface{}{
+		"reject": map[string]interface{}{
+			"sandbox_approval":  true,
+			"rules":             true,
+			"mcp_elicitations":  true,
+		},
+	}
+}
+
+// resolveEnvVar resolves a $VAR string to its environment variable value.
+func resolveEnvVar(s string) string {
+	if strings.HasPrefix(s, "$") {
+		return os.Getenv(s[1:])
+	}
+	return s
 }
 
 // getString retrieves a string value from a map, resolving $VAR env indirection
