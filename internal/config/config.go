@@ -92,7 +92,7 @@ const (
 	DefaultMaxTurns          = 20
 	DefaultMaxRetryBackoffMs = 300000
 	DefaultCodexCommand        = "codex app-server"
-	DefaultApprovalPolicy      = "auto-edit"
+	DefaultApprovalPolicy      = "never"
 	DefaultThreadSandbox       = "workspace-write"
 	DefaultTurnSandboxPolicy   = "workspace-write"
 	DefaultTurnTimeoutMs       = 3600000
