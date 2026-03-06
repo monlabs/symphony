@@ -570,6 +570,7 @@ func (o *Orchestrator) runWorker(ctx context.Context, issue *domain.Issue, attem
 		ReadTimeoutMs:     o.config.Codex.ReadTimeoutMs,
 		StallTimeoutMs:    o.config.Codex.StallTimeoutMs,
 		MaxTurns:          o.config.Agent.MaxTurns,
+		LinearAPIKey:      o.config.Tracker.APIKey,
 	}
 
 	runner := agent.NewDefaultRunner(

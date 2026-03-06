@@ -26,6 +26,7 @@ type RunnerConfig struct {
 	ApprovalPolicy    interface{} // string or map[string]interface{}
 	ThreadSandbox     string
 	TurnSandboxPolicy string
+	LinearAPIKey      string
 	TurnTimeoutMs     int
 	ReadTimeoutMs     int
 	StallTimeoutMs    int
@@ -164,7 +165,9 @@ func (r *DefaultRunner) RunAttempt(ctx context.Context, issue *domain.Issue, att
 
 	// 3. Send thread/start request (camelCase per Codex app-server schema).
 	threadStartParams := map[string]interface{}{
-		"sandbox": r.config.ThreadSandbox,
+		"sandbox":      r.config.ThreadSandbox,
+		"cwd":          r.workspacePath,
+		"dynamicTools": LinearGraphQLToolSpecs(),
 	}
 	if r.config.ApprovalPolicy != nil && r.config.ApprovalPolicy != "" {
 		threadStartParams["approvalPolicy"] = r.config.ApprovalPolicy
@@ -213,6 +216,8 @@ func (r *DefaultRunner) RunAttempt(ctx context.Context, issue *domain.Issue, att
 		// input is an array of UserInput objects, not a plain string.
 		turnParams := map[string]interface{}{
 			"threadId": threadID,
+			"cwd":      r.workspacePath,
+			"title":    fmt.Sprintf("%s: %s", issue.Identifier, issue.Title),
 			"input": []map[string]interface{}{
 				{
 					"type": "text",
@@ -338,8 +343,8 @@ func (r *DefaultRunner) processTurnEvents(ctx context.Context, sess *session, is
 			r.handleToolRequestUserInput(ctx, sess, msg, issueID, onUpdate)
 
 		case "item/tool/call":
-			// Dynamic tool call: return unsupported error.
-			r.handleUnsupportedToolCall(ctx, sess, msg, issueID, onUpdate)
+			// Dynamic tool call: execute via dynamic tool handler.
+			r.handleToolCall(ctx, sess, msg, issueID, onUpdate)
 
 		case "notification":
 			// Forward notification events.
@@ -425,26 +430,38 @@ func (r *DefaultRunner) handleToolRequestUserInput(ctx context.Context, sess *se
 	}
 }
 
-// handleUnsupportedToolCall returns an error for unsupported tool calls.
-func (r *DefaultRunner) handleUnsupportedToolCall(ctx context.Context, sess *session, msg *ProtocolMessage, issueID string, onUpdate UpdateCallback) {
+// handleToolCall executes dynamic tool calls from Codex (e.g. linear_graphql).
+func (r *DefaultRunner) handleToolCall(ctx context.Context, sess *session, msg *ProtocolMessage, issueID string, onUpdate UpdateCallback) {
 	toolName := ""
+	var arguments interface{}
 	if msg.Params != nil {
-		toolName, _ = msg.Params["name"].(string)
+		// Try "tool" then "name" for the tool name.
+		if t, ok := msg.Params["tool"].(string); ok {
+			toolName = t
+		} else if n, ok := msg.Params["name"].(string); ok {
+			toolName = n
+		}
+		arguments = msg.Params["arguments"]
 	}
 
-	r.logger.Warn("unsupported tool call", "tool", toolName, "issue_id", issueID)
-	r.emitUpdate(onUpdate, issueID, domain.EventUnsupportedToolCall, fmt.Sprintf("unsupported tool: %s", toolName), nil)
+	r.logger.Info("executing dynamic tool call", "tool", toolName, "issue_id", issueID)
+
+	result := ExecuteDynamicTool(toolName, arguments, r.config.LinearAPIKey)
+
+	success, _ := result["success"].(bool)
+	if success {
+		r.emitUpdate(onUpdate, issueID, domain.EventOtherMessage, fmt.Sprintf("tool call completed: %s", toolName), nil)
+	} else {
+		r.emitUpdate(onUpdate, issueID, domain.EventUnsupportedToolCall, fmt.Sprintf("tool call failed: %s", toolName), nil)
+	}
 
 	if msg.ID != nil {
 		resp := &ProtocolMessage{
-			ID: msg.ID,
-			Error: &ProtocolError{
-				Code:    -1,
-				Message: fmt.Sprintf("unsupported tool: %s", toolName),
-			},
+			ID:     msg.ID,
+			Result: result,
 		}
 		if err := sess.writeMessage(resp); err != nil {
-			r.logger.Error("failed to send unsupported tool error response", "error", err, "issue_id", issueID)
+			r.logger.Error("failed to send tool call response", "error", err, "issue_id", issueID)
 		}
 	}
 }
