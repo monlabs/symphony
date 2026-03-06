@@ -206,7 +206,13 @@ func (r *DefaultRunner) RunAttempt(ctx context.Context, issue *domain.Issue, att
 		if turn == 1 {
 			turnPrompt = prompt
 		} else {
-			turnPrompt = "Continue working on the task. Review what you've done so far and proceed with the next steps."
+			turnPrompt = fmt.Sprintf(`Continuation guidance:
+
+- The previous Codex turn completed normally, but the Linear issue is still in an active state.
+- This is continuation turn #%d of %d for the current agent run.
+- Resume from the current workspace and workpad state instead of restarting from scratch.
+- The original task instructions and prior turn context are already present in this thread, so do not restate them before acting.
+- Focus on the remaining ticket work and do not end the turn while the issue stays active unless you are truly blocked.`, turn, r.config.MaxTurns)
 		}
 
 		// Create per-turn context with timeout.
