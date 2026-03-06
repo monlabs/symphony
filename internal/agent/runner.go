@@ -27,6 +27,10 @@ type RunnerConfig struct {
 	ThreadSandbox     string
 	TurnSandboxPolicy string
 	LinearAPIKey      string
+
+	// IssueStateChecker is called between turns to check if the issue is still active.
+	// Returns (stillActive bool, err error). If nil, turns continue unconditionally.
+	IssueStateChecker func(issueID string) (bool, error)
 	TurnTimeoutMs     int
 	ReadTimeoutMs     int
 	StallTimeoutMs    int
@@ -253,8 +257,21 @@ func (r *DefaultRunner) RunAttempt(ctx context.Context, issue *domain.Issue, att
 		case turnOutcomeCompleted:
 			r.logger.Info("turn completed successfully", "turn", turn, "issue_id", issue.ID)
 			r.emitUpdate(onUpdate, issue.ID, domain.EventTurnCompleted, fmt.Sprintf("turn %d completed", turn), nil)
-			// Continue to next turn if we haven't hit max — the orchestrator will
-			// check if the issue is still active before dispatching again.
+
+			// Re-check if issue is still in an active state before continuing.
+			// This matches the Elixir reference: continue_with_issue?()
+			if r.config.IssueStateChecker != nil {
+				stillActive, err := r.config.IssueStateChecker(issue.ID)
+				if err != nil {
+					r.logger.Warn("failed to check issue state between turns, stopping", "error", err, "issue_id", issue.ID)
+					return nil // Graceful stop, orchestrator will re-check
+				}
+				if !stillActive {
+					r.logger.Info("issue no longer in active state after turn, stopping", "turn", turn, "issue_id", issue.ID)
+					return nil
+				}
+				r.logger.Info("issue still active, continuing to next turn", "turn", turn+1, "issue_id", issue.ID)
+			}
 			continue
 
 		case turnOutcomeFailed:

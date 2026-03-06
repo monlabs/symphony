@@ -571,6 +571,16 @@ func (o *Orchestrator) runWorker(ctx context.Context, issue *domain.Issue, attem
 		StallTimeoutMs:    o.config.Codex.StallTimeoutMs,
 		MaxTurns:          o.config.Agent.MaxTurns,
 		LinearAPIKey:      o.config.Tracker.APIKey,
+		IssueStateChecker: func(issueID string) (bool, error) {
+			issues, err := o.tracker.FetchIssueStatesByIDs([]string{issueID})
+			if err != nil {
+				return false, err
+			}
+			if len(issues) == 0 {
+				return false, nil // Issue gone
+			}
+			return o.isActiveState(issues[0].State), nil
+		},
 	}
 
 	runner := agent.NewDefaultRunner(
