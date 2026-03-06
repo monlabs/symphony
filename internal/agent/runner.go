@@ -246,8 +246,9 @@ func (r *DefaultRunner) RunAttempt(ctx context.Context, issue *domain.Issue, att
 		case turnOutcomeCompleted:
 			r.logger.Info("turn completed successfully", "turn", turn, "issue_id", issue.ID)
 			r.emitUpdate(onUpdate, issue.ID, domain.EventTurnCompleted, fmt.Sprintf("turn %d completed", turn), nil)
-			// Continue to next turn if we haven't hit max.
-			continue
+			// Codex does all work within a single turn. A completed turn means the agent
+			// finished its work. No need to send continuation turns.
+			return nil
 
 		case turnOutcomeFailed:
 			r.logger.Warn("turn failed", "turn", turn, "issue_id", issue.ID)
