@@ -81,8 +81,8 @@ const issuesByStatesQuery = `query($projectSlug: String!, $stateNames: [String!]
 }`
 
 const issueStatesByIDsQuery = `query($ids: [ID!]!) {
-  nodes(ids: $ids) {
-    ... on Issue {
+  issues(filter: { id: { in: $ids } }) {
+    nodes {
       id identifier title state { name }
     }
   }
@@ -300,28 +300,24 @@ func (c *LinearClient) FetchIssueStatesByIDs(issueIDs []string) ([]domain.Issue,
 		return nil, err
 	}
 
-	var data nodesData
+	var data issuesData
 	if err := json.Unmarshal(respBody, &data); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrLinearUnknownPayload, err)
 	}
 
 	var issues []domain.Issue
-	for _, raw := range data.Nodes {
-		var mi minimalLinearIssue
-		if err := json.Unmarshal(raw, &mi); err != nil {
-			continue
-		}
-		// Skip nodes that didn't match the Issue fragment (empty id).
-		if mi.ID == "" {
+	for i := range data.Issues.Nodes {
+		n := &data.Issues.Nodes[i]
+		if n.ID == "" {
 			continue
 		}
 		issue := domain.Issue{
-			ID:         mi.ID,
-			Identifier: mi.Identifier,
-			Title:      mi.Title,
+			ID:         n.ID,
+			Identifier: n.Identifier,
+			Title:      n.Title,
 		}
-		if mi.State != nil {
-			issue.State = mi.State.Name
+		if n.State != nil {
+			issue.State = n.State.Name
 		}
 		issues = append(issues, issue)
 	}

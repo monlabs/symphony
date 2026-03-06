@@ -146,12 +146,14 @@ func TestFetchIssueStatesByIDs_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resp := map[string]interface{}{
 			"data": map[string]interface{}{
-				"nodes": []map[string]interface{}{
-					{
-						"id":         "id1",
-						"identifier": "PROJ-1",
-						"title":      "Issue 1",
-						"state":      map[string]string{"name": "In Progress"},
+				"issues": map[string]interface{}{
+					"nodes": []map[string]interface{}{
+						{
+							"id":         "id1",
+							"identifier": "PROJ-1",
+							"title":      "Issue 1",
+							"state":      map[string]string{"name": "In Progress"},
+						},
 					},
 				},
 			},
