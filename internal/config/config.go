@@ -91,10 +91,13 @@ const (
 	DefaultMaxConcurrent     = 10
 	DefaultMaxTurns          = 20
 	DefaultMaxRetryBackoffMs = 300000
-	DefaultCodexCommand      = "codex app-server"
-	DefaultTurnTimeoutMs     = 3600000
-	DefaultReadTimeoutMs     = 5000
-	DefaultStallTimeoutMs    = 300000
+	DefaultCodexCommand        = "codex app-server"
+	DefaultApprovalPolicy      = "auto-edit"
+	DefaultThreadSandbox       = "workspace-write"
+	DefaultTurnSandboxPolicy   = "workspace-write"
+	DefaultTurnTimeoutMs       = 3600000
+	DefaultReadTimeoutMs       = 5000
+	DefaultStallTimeoutMs      = 300000
 )
 
 var (
@@ -165,8 +168,17 @@ func ParseServiceConfig(raw map[string]interface{}) *ServiceConfig {
 		cfg.Codex.Command = DefaultCodexCommand
 	}
 	cfg.Codex.ApprovalPolicy = getString(codex, "approval_policy")
+	if cfg.Codex.ApprovalPolicy == "" {
+		cfg.Codex.ApprovalPolicy = DefaultApprovalPolicy
+	}
 	cfg.Codex.ThreadSandbox = getString(codex, "thread_sandbox")
+	if cfg.Codex.ThreadSandbox == "" {
+		cfg.Codex.ThreadSandbox = DefaultThreadSandbox
+	}
 	cfg.Codex.TurnSandboxPolicy = getString(codex, "turn_sandbox_policy")
+	if cfg.Codex.TurnSandboxPolicy == "" {
+		cfg.Codex.TurnSandboxPolicy = DefaultTurnSandboxPolicy
+	}
 	cfg.Codex.TurnTimeoutMs = getInt(codex, "turn_timeout_ms", DefaultTurnTimeoutMs)
 	cfg.Codex.ReadTimeoutMs = getInt(codex, "read_timeout_ms", DefaultReadTimeoutMs)
 	cfg.Codex.StallTimeoutMs = getInt(codex, "stall_timeout_ms", DefaultStallTimeoutMs)

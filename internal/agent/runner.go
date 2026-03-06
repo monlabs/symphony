@@ -162,10 +162,14 @@ func (r *DefaultRunner) RunAttempt(ctx context.Context, issue *domain.Issue, att
 		return fmt.Errorf("send initialized: %w", err)
 	}
 
-	// 3. Send thread/start request.
-	threadResult, err := sess.sendRequest(ctx, "thread/start", map[string]interface{}{
+	// 3. Send thread/start request (camelCase per Codex app-server schema).
+	threadStartParams := map[string]interface{}{
 		"sandbox": r.config.ThreadSandbox,
-	})
+	}
+	if r.config.ApprovalPolicy != "" {
+		threadStartParams["approvalPolicy"] = r.config.ApprovalPolicy
+	}
+	threadResult, err := sess.sendRequest(ctx, "thread/start", threadStartParams)
 	if err != nil {
 		r.emitUpdate(onUpdate, issue.ID, domain.EventStartupFailed, "thread/start failed: "+err.Error(), nil)
 		return fmt.Errorf("thread/start: %w", err)
@@ -205,16 +209,22 @@ func (r *DefaultRunner) RunAttempt(ctx context.Context, issue *domain.Issue, att
 			turnCtx, turnCancel = context.WithCancel(ctx)
 		}
 
-		// Send turn/start request.
+		// Send turn/start request (camelCase per Codex app-server schema).
+		// input is an array of UserInput objects, not a plain string.
 		turnParams := map[string]interface{}{
-			"thread_id": threadID,
-			"prompt":    turnPrompt,
+			"threadId": threadID,
+			"input": []map[string]interface{}{
+				{
+					"type": "text",
+					"text": turnPrompt,
+				},
+			},
 		}
 		if r.config.ApprovalPolicy != "" {
-			turnParams["approval_policy"] = r.config.ApprovalPolicy
+			turnParams["approvalPolicy"] = r.config.ApprovalPolicy
 		}
 		if r.config.TurnSandboxPolicy != "" {
-			turnParams["sandbox_policy"] = r.config.TurnSandboxPolicy
+			turnParams["sandboxPolicy"] = buildSandboxPolicy(r.config.TurnSandboxPolicy)
 		}
 
 		_, err := sess.sendRequest(turnCtx, "turn/start", turnParams)
@@ -689,6 +699,21 @@ func (s *session) close() {
 		delete(s.pending, id)
 	}
 	s.mu.Unlock()
+}
+
+// buildSandboxPolicy converts a sandbox policy string to the structured object
+// expected by the Codex app-server protocol.
+func buildSandboxPolicy(policy string) map[string]interface{} {
+	switch policy {
+	case "danger-full-access":
+		return map[string]interface{}{"type": "dangerFullAccess"}
+	case "read-only":
+		return map[string]interface{}{"type": "readOnly"}
+	case "workspace-write":
+		return map[string]interface{}{"type": "workspaceWrite"}
+	default:
+		return map[string]interface{}{"type": "workspaceWrite"}
+	}
 }
 
 // extractThreadID reads thread_id from a thread/start response.
